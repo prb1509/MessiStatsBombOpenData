@@ -1,0 +1,432 @@
+```{r}
+#imports
+library(grid)
+library(ggplot2)
+library(ggsoccer)
+library(StatsBombR)
+library(soccermatics)
+library(ggforce)
+library(viridis)
+library(gridExtra)
+library(reshape2)
+library(MASS)
+```
+
+```{r}
+#helper functions to modify and clean data
+id_to_year = function(id){
+  if (id == 1) {
+    return("2017-2018")
+  }
+  else if (id == 2) {
+    return("2016-2017")
+  }
+  else if (id == 4) {
+    return("2018-2019")
+  }
+  else if (id == 21) {
+    return("2009-2010")
+  }
+  else if (id == 22) {
+    return("2010-2011")
+  }
+  else if (id == 23) {
+    return("2011-2012")
+  }
+  else if (id == 24) {
+    return("2012-2013")
+  }
+  else if (id == 25) {
+    return("2013-2014")
+  }
+  else if (id == 26) {
+    return("2014-2015")
+  }
+  else if (id == 27) {
+    return("2015-2016")
+  }
+  else if (id == 37) {
+    return("2004-2005")
+  }
+  else if (id == 38) {
+    return("2005-2006")
+  }
+  else if (id == 39) {
+    return("2006-2007")
+  }
+  else if (id == 40) {
+    return("2007-2008")
+  }
+  else if (id == 41) {
+    return("2008-2009")
+  }
+  else if (id == 42) {
+    return("2019-2020")
+  }
+  else{
+    return(NULL)
+  }
+}
+
+calc_90s = function(df,year){
+  df_season = df %>% filter(season == year)
+  games = unique(df_season$match_id)
+  num_90s = 0
+  for (game in games){
+    minutes = unique((df_season %>% filter(match_id == game))$minute)
+    start_min = min(minutes)
+    end_min = max(minutes)
+    if (start_min < 5) {
+      #5 min is arbitrary, but we expect that Messi has started
+      #even if his first touch was only after 5 minutes
+      start_min = 0
+    }
+    
+    if (end_min > 90) {
+      #we don't count minutes after 90 by convention
+      end_min = 90
+    }
+    
+    num_90s = num_90s + (end_min - start_min) / 90
+  }
+  
+  return(num_90s)
+}
+
+draw_pitch = function(plt){
+  #using statsbomb dimensions
+  return(plt +
+           annotate("rect",xmin = 0, xmax = 120, ymin = 0, ymax = 80, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 0, xmax = 60, ymin = 0, ymax = 80, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 18, xmax = 0, ymin = 18, ymax = 62, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 102, xmax = 120, ymin = 18, ymax = 62, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 0, xmax = 6, ymin = 30, ymax = 50, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 120, xmax = 114, ymin = 30, ymax = 50, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 120, xmax = 120.5, ymin =36, ymax = 44, fill = NA, colour = "black", size = 0.6) +
+           annotate("rect",xmin = 0, xmax = -0.5, ymin =36, ymax = 44, fill = NA, colour = "black", size = 0.6) +
+           annotate("segment", x = 60, xend = 60, y = -0.5, yend = 80.5, colour = "black", size = 0.6) +
+           annotate("segment", x = 0, xend = 0, y = 0, yend = 80, colour = "black", size = 0.6) +
+           annotate("segment", x = 120, xend = 120, y = 0, yend = 80, colour = "black", size = 0.6) +  
+           theme(rect = element_blank(),
+                 line = element_blank()) +
+           
+           # add penalty spot right
+           annotate("point", x = 108 , y = 40, colour = "black", size = 1.05) +
+           annotate("path", colour = "black", size = 0.6,
+                    x = 60 + 10 * cos(seq(0,2 * pi,length.out = 2000)),
+                    y = 40 + 10 * sin(seq(0,2 * pi,length.out = 2000))) +
+           
+           # add center spot
+           annotate("point", x = 60 , y = 40, colour = "black", size = 1.05) +
+           annotate("path", x = 12 + 10 * cos(seq(-0.3 * pi,0.3 * pi,length.out = 30)), size = 0.6,
+                    y = 40 + 10 * sin(seq(-0.3 * pi,0.3 * pi,length.out = 30)), col = "black") +
+           annotate("path", x = 107.84 - 10 * cos(seq(-0.3 * pi,0.3 * pi,length.out = 30)), size = 0.6,
+                    y = 40 - 10 * sin(seq(-0.3 * pi,0.3 * pi,length.out = 30)), col = "black") 
+  )
+}
+```
+
+```{r}
+#read and clean data
+df = read.csv("MessiData_2004_2020.csv")
+xT_grid = read.csv("xT_Grid.csv",header = FALSE)
+
+df = df %>% mutate(shot.statsbomb_xg = ifelse(is.na(shot.statsbomb_xg),0 , shot.statsbomb_xg),
+                   pass.outcome.name = ifelse(is.na(pass.outcome.name),"Complete", pass.outcome.name))
+```
+
+```{r}
+#initialize variables for plotting
+name = "Lionel Andrés Messi Cuccittini"
+xT_rows = xT_grid %>% nrow()
+xT_cols = xT_grid %>% ncol()
+seasons = sort(sapply(unique(df$season_id),id_to_year))
+df$season = sapply(df$season_id, id_to_year)
+messi_events = df %>% filter(player.name == name)
+num_90s = c()
+for (i in 1:length(seasons)) {
+  num_90s[i] = calc_90s(messi_events,seasons[i])
+}
+```
+
+```{r}
+#plotting functions
+plot_heatmap = function(df){
+  plots = list()
+  layout(matrix(1:length(seasons), nrow = 4, byrow = TRUE))
+  for (i in 1:length(seasons)){
+    
+    events = df %>% filter(season == seasons[i])
+    loc_events = data.frame(x = (events$location.x), y = (events$location.y))
+    #get kernel density estimate and convert to dataframe
+    kde = kde2d(na.omit(loc_events$x), na.omit(loc_events$y), n = 200,
+                lims = c(c(120 - 0.05, 0.25), c(0.25, 80 - 0.05)))
+    
+    kde_df = data.frame(expand.grid(x = kde$x, y = kde$y), z = as.vector(kde$z))
+    #plot heatmap
+    p = ggplot() + geom_tile(data = kde_df, aes(x = x, y = y, fill = z)) +
+      scale_fill_distiller(palette ="Oranges", na.value ="white") +
+      
+      guides(fill = "none") + theme(plot.title = element_text(hjust = 1)) + scale_y_reverse() +
+      theme_void() + 
+      ggtitle(as.character(seasons[i])) + theme(title = element_text(size = 17))
+    
+    p = p + theme(plot.margin = unit(c(0.525,0.9,0.7,0.9), "cm"))
+    p = draw_pitch(p)
+    plots[[i]] = p
+    
+  }
+  do.call(grid.arrange, plots)
+}
+
+plot_dribbles = function(df){
+  dribbles = c()
+  for (i in 1:length(seasons)) {
+    df_dribble = df %>% filter(type.name == "Dribble", dribble.outcome.name == "Complete",
+                                         season == seasons[i])
+    dribbles[i] = nrow(df_dribble) / num_90s[i]
+  }
+  
+  ggplot(data.frame(seasons,dribbles), aes(seasons,dribbles, group = 1)) + geom_point() + geom_line() +
+    theme(axis.text.x = element_text(angle = 90)) + xlab("Season") + ylab("Dribbles per 90") +
+    ggtitle("Lionel Messi - Dribbles")
+}
+
+plot_xT = function(df){
+  xT = c()
+  for (i in 1:length(seasons)) {
+    carry = df %>% filter(season == seasons[i], type.name == "Carry")
+    pass = df %>% filter(season == seasons[i], type.name == "Pass",
+                         pass.outcome.name =="Complete")
+    
+    pass["x1_bin"] = cut(pass$location.x, breaks = xT_cols, labels = FALSE)
+    pass["y1_bin"] = cut(pass$location.y, breaks = xT_rows, labels = FALSE)
+    pass["x2_bin"] = cut(pass$pass.end_location.x, breaks = xT_cols, labels = FALSE)
+    pass["y2_bin"] = cut(pass$pass.end_location.y, breaks = xT_rows, labels = FALSE)
+    
+    pass["start_value"] = mapply(function(x,y) xT_grid[y,x] ,pass$x1_bin,pass$y1_bin)
+    pass["end_value"] = mapply(function(x,y) xT_grid[y,x] ,pass$x2_bin,pass$y2_bin)
+    pass["xT"] = pass$end_value - pass$start_value
+    
+    carry["x1_bin"] = cut(carry$location.x, breaks = xT_cols, labels = FALSE)
+    carry["y1_bin"] = cut(carry$location.y, breaks = xT_rows, labels = FALSE)
+    carry["x2_bin"] = cut(carry$carry.end_location.x, breaks = xT_cols, labels = FALSE)
+    carry["y2_bin"] = cut(carry$carry.end_location.y, breaks = xT_rows, labels = FALSE)
+    
+    carry["start_value"] = mapply(function(x,y) xT_grid[y,x] ,carry$x1_bin,carry$y1_bin)
+    carry["end_value"] = mapply(function(x,y) xT_grid[y,x] ,carry$x2_bin,carry$y2_bin)
+    carry["xT"] = carry$end_value - carry$start_value
+    
+    xT[i] = (sum(carry$xT) + sum(pass$xT)) / num_90s[i]
+  }
+  
+  xT_df = data.frame(xT = xT, y = seasons)
+  ggplot(data = xT_df) + geom_col(aes(y = seasons, x = xT)) +
+    xlab("xT/per 90") + ylab("Season") + ggtitle("Lionel Messi - Expected Threat")
+}
+
+plot_shotmap = function(df){
+  p = ggplot() 
+  
+  p = draw_pitch(p) +
+    geom_point(data = df %>% filter( type.name == "Shot"), 
+               aes(x = location.x, y = location.y, color = shot.statsbomb_xg),
+               size = 4, alpha = 0.4) + facet_wrap(vars(season)) + 
+    theme(axis.text.x=element_blank(),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          plot.caption = element_text(size = 13, hjust = 0.5, vjust = 0.5),
+          axis.text.y = element_blank(),
+          legend.position = c(0.8,1.15),
+          legend.title = element_text(size = 16, hjust = 0.5, vjust = 1),
+          legend.text = element_text(size = 20),
+          legend.margin = margin(c(20, 10, -85, 50)),
+          legend.key.width = unit(1.5,"cm"),
+          plot.title = element_text(face ="bold",size = 27.5,
+                                    colour = "black", hjust = 0.5),
+          legend.direction = "horizontal",
+          axis.ticks = element_blank(),
+          aspect.ratio = c(65 / 100),
+          plot.background = element_rect(fill = "white"),
+          strip.text.x = element_text(size=13)) +
+    scale_colour_gradientn(colours = viridis(12), limit = c(0,0.8), 
+                           oob = scales::squish, name = "xG Value") + 
+    ggtitle("Lionel Messi - Shot Map") +
+    guides(fill = guide_colourbar(title.position = "top")) +
+    coord_flip(xlim = c(85, 125)) 
+  
+  p #display plot
+}
+
+plot_shot_vol_quantity = function(df){
+  shots = c()
+  xg_shot = c()
+  
+  for (i in 2:length(seasons)) {
+    df_shot = df %>% filter(type.name == "Shot", shot.type.name == "Open Play",
+                                      season == seasons[i])
+    xg = sum(df_shot$shot.statsbomb_xg)
+    shots[i] = nrow(df_shot) / num_90s[i]
+    xg_shot[i] = xg / nrow(df_shot)
+  }
+  ggplot(data.frame(seasons,shots, xg_shot), aes(x = seasons, y = shots, size = xg_shot,)) + 
+    geom_point(alpha = 0.5, shape = 21, fill = "red") +
+    scale_size(range = c(3,9), name = "xg/shot") +
+    #scale_fill_viridis(discrete = TRUE, guide = "none", option = "A") +
+    theme(legend.position = "bottom") +
+    theme(axis.text.x = element_text(angle = 90)) + xlab("Season") + ylab("Open Play Shots per 90") +
+    ggtitle("Lionel Messi - Shot volume and quality")
+}
+
+plot_goals_vs_xg = function(df){
+  total_xg = c()
+  goals = c()
+  
+  for (i in 1:length(seasons)) {
+    df_shot = df %>% filter(type.name == "Shot", shot.type.name == "Open Play",
+                                      season == seasons[i])
+    xg = sum(df_shot$shot.statsbomb_xg)
+    total_xg[i] = xg
+    goals[i] = sum(df_shot$shot.outcome.name == "Goal", na.rm = TRUE)
+  }
+  df1 = data.frame(Goals = goals, xG = total_xg, seasons)
+  df2 = melt(df1, id.vars ='seasons')
+  ggplot(df2, aes(x = seasons, y = value, fill = variable)) +
+    geom_bar(stat = 'identity', position = 'dodge', width = 0.5) +  
+    theme(axis.text.x = element_text(angle = 90)) + xlab("Season") + ylab("Quantity")
+}
+
+plot_shot_on_goal_locations = function(df){
+  l = 0.732
+  w = 0.244
+  start_x = (1 - l) / 2
+  start_y = 0.2
+  end_x = (1 + l) / 2
+  
+  
+  nrows = 3
+  ncols = 5
+  
+  #get data on shots and classify them
+  shots_on_target = df %>% filter(type.name == "Shot",
+                                            shot.outcome.name %in% c("Goal", "Saved", "Saved to Post"), 
+                                            shot.end_location.y <= 44 & shot.end_location.y >= 36)
+  
+  shots_on_target$shot.end_location.y = 44 - shots_on_target$shot.end_location.y
+  
+  #assign shots to bins corresponding to the shot end location data
+  shots_on_target["z_bin"] = cut(shots_on_target$shot.end_location.z, breaks = nrows, labels = FALSE)
+  shots_on_target["y_bin"] = cut(shots_on_target$shot.end_location.y, breaks = ncols, labels = FALSE)
+  
+  shot = matrix(c(0),nrow = nrows, ncol = ncols)
+  
+  #count number of shots in each bin
+  for (i in 1:length(shots_on_target$z_bin)){
+    shot[shots_on_target$z_bin[i], shots_on_target$y_bin[i]] = shot[shots_on_target$z_bin[i],
+                                                              shots_on_target$y_bin[i]] + 1
+  }
+  
+  #switch the first and third rows since first row bins correspond to the bottom row of the goal
+  #and third row bin to the top row
+  shot =  matrix(c(shot[3,],shot[2,],shot[1,]), nrow = nrows, ncol = ncols, byrow = TRUE)
+  
+  #now we start with the grid object
+  grid.newpage()
+  
+  #color scale
+  f = colorRamp(c("turquoise3", "slateblue4"))
+  invisible(colors <- rgb(f(shot / max(shot)) / 255))
+  
+  #thickness of goalpost lines approx
+  lwd = 0.005
+  
+  #black background
+  bg = rectGrob(gp = gpar(fill = "black"))
+  
+  #the posts and crossbar
+  front = segmentsGrob(c(start_x,start_x,end_x), c(start_y,start_y + w, start_y + w),
+                       c(start_x,end_x,end_x), c(start_y + w, start_y + w,start_y),
+                       gp = gpar(col = "green", lwd = 6, lineend = "square"))
+  
+  #the "net"
+  back = segmentsGrob(c(start_x + 0.05,start_x,start_x,end_x,end_x), 
+                      c(start_y + 0.05, start_y, start_y + w,start_y,start_y + w),
+                      c(end_x - 0.05,start_x + 0.05,start_x + 0.05,end_x - 0.05,end_x - 0.05),
+                      c(start_y + 0.05,start_y + 0.05,start_y + 0.05,start_y + 0.05,start_y + 0.05),
+                      gp = gpar(col = "gray", lty = 3))
+  
+  #ref line
+  line = segmentsGrob(0, 0.2 - lwd / 2, 1, 0.2 - lwd / 2, gp =  gpar(col = "gray")) 
+  
+  grid.draw(bg)
+  
+  #draw the rectangles
+  for (i in 1:15) {
+    if (i%%3 == 1) {
+      grid.rect(x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) *l / 5 , y =  start_y + 2* w / 3 + w / 6,
+                width = l / 5, height = (w - lwd) / 3, gp = gpar(fill = colors[i],col = colors[i])) 
+      grid.text(as.character(shot[i]),x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) * l / 5, 
+                y =  start_y + 2 * w / 3 + w / 6, gp = gpar(fontsize = 7.5, fontface = "bold"))
+    }else if (i%%3 == 2) {
+      grid.rect(x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) * l / 5, y =  start_y + w / 3 + w / 6,
+                width = l / 5, height = (w - lwd) / 3, gp = gpar(fill = colors[i],col = colors[i]))
+      grid.text(as.character(shot[i]),x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) * l / 5, 
+                y =  start_y + w / 3 + w / 6, gp = gpar(fontsize = 7.5, fontface = "bold"))
+    }else{
+      grid.rect(x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) * l / 5, y =  start_y + w / 6,
+                width = l / 5, height = (w - lwd) / 3, gp = gpar(fill = colors[i],col = colors[i])) 
+      grid.text(as.character(shot[i]),x = (l - lwd) / 10 + start_x + (ceiling(i / 3) - 1) * l / 5, 
+                y =  start_y + w / 6, gp = gpar(fontsize = 7.5, fontface = "bold"))
+    }
+  }
+  
+  grid.draw(front)
+  grid.draw(back)
+  grid.draw(line)
+  
+  grid.text(c("Lionel Messi: Shot locations","Seasons - 2004/05 to 2019-2020" ,"Comps: La Liga"),c(0.25,0.25,0.25),c(0.95,0.85,0.75),
+            gp = gpar(col = "hotpink", fontsize = 14, fontface = "bold"))
+  
+  grid.text(c("DATA: StatsBomb open data", "https://github.com/statsbomb/StatsBombR"), c(0.87,0.81),c(0.95,0.9),
+            gp = gpar(col = "hotpink", fontsize = 9, fontface = c("plain","italic")))
+  
+  #legend
+  leg_width = 3 * l / (5 * length(colors))
+  leg_height = 0.05
+  for (i in 1:length(colors)) {
+    grid.rect(l / 2.5 + (i - 1) * leg_width, 0.1, width = leg_width, height = leg_height, 
+              gp = gpar(col = sort(colors)[i],fill = sort(colors)[i]))
+  }
+  grid.text(c("Low shot frequency","High shot frequency"),c(start_x+l/16,end_x-l/16),0.1, 
+          gp = gpar(col = "hotpink", fontsize = 10))
+}
+```
+
+```{r,fig.height=14,fig.width=16,echo=FALSE,eval=TRUE, cache=TRUE}
+#generate plots
+plot_heatmap(messi_events)
+```
+
+```{r,echo=FALSE,eval=TRUE, cache=TRUE}
+plot_dribbles(messi_events)
+```
+
+```{r,cache=TRUE}
+plot_xT(messi_events)
+```
+
+```{r,echo=FALSE,eval=TRUE, cache=TRUE}
+plot_shot_on_goal_locations(messi_events)
+```
+
+```{r,fig.height=14, fig.width=14,echo=FALSE, cache=TRUE}
+plot_shotmap(messi_events)
+```
+
+```{r,echo=FALSE, cache=TRUE,warning=FALSE,message=FALSE}
+plot_goals_vs_xg(messi_events)
+```
+
+```{r,echo=FALSE, cache=TRUE,warning=FALSE,message=FALSE}
+plot_shot_vol_quantity(messi_events)
+```
